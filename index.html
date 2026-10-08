@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b3c5d"><link rel="manifest" href="manifest.json"><link rel="icon" href="icon.svg">
+<title>Wade or Wait</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+:root{--bg:#fff;--fg:#0f172a;--card:#f1f5f9}
+@media(prefers-color-scheme:dark){:root{--bg:#0f172a;--fg:#f1f5f9;--card:#1e293b}}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;font:16px system-ui,sans-serif;background:var(--bg);color:var(--fg);padding-top:env(safe-area-inset-top)}
+header{padding:10px 14px;background:#0b3c5d;color:#fff;display:flex;justify-content:space-between;align-items:center}
+header b{font-size:18px}header a{color:#bae6fd;font-size:14px}
+#modes{display:flex;gap:6px;overflow-x:auto;padding:8px;background:var(--card)}
+.chip{border:1px solid #94a3b8;border-radius:999px;padding:6px 12px;background:transparent;color:var(--fg);white-space:nowrap;font:inherit}
+.chip.on{background:#0b3c5d;color:#fff;border-color:#0b3c5d}
+#map{flex:1;min-height:0}
+#sheet{padding:12px 14px calc(12px + env(safe-area-inset-bottom));background:var(--card)}
+#report{width:100%;padding:14px;border:0;border-radius:12px;background:#0b3c5d;color:#fff;font:700 17px system-ui}
+#report:disabled{opacity:.6}
+#status{min-height:1.4em;margin:8px 0 0;font-size:14px}
+.row{display:flex;justify-content:space-between;padding:6px 10px;border-radius:8px;margin:4px 0;color:#fff;font-weight:600}
+.row.sel{outline:3px solid var(--fg)}
+.pin{width:22px;height:22px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 4px #0006;cursor:pointer}
+.err{color:#dc2626;font-weight:600}small{opacity:.75;display:block;margin-top:8px}
+</style></head><body>
+<header><b>Wade or Wait</b><a id="hot" target="_blank" rel="noopener">Flood hotspots</a></header>
+<div id="modes"></div>
+<div id="map"></div>
+<div id="sheet">
+  <button id="report">📷 Report a flooded road</button>
+  <input id="file" type="file" accept="image/*" capture="environment" hidden>
+  <p id="status"></p><div id="result"></div>
+  <small>Photo estimates can be wrong. Stay at a safe distance and never wade through fast or deep water.</small>
+</div>
+<script src="config.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const API = window.API_URL.replace(/\/$/, "");
+const MODES = {pedestrian:"Walking", two_wheeler:"Two-wheeler", hatchback:"Hatchback", suv:"SUV", ambulance:"Ambulance"};
+const COLORS = {GO:"#16a34a", CAUTION:"#d97706", DO_NOT_CROSS:"#dc2626", UNKNOWN:"#6b7280"};
+const LABEL = {GO:"Go", CAUTION:"Caution", DO_NOT_CROSS:"Do not cross", UNKNOWN:"Not sure"};
+const store = {get:k=>{try{return localStorage.getItem(k)}catch{return null}}, set:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
+let mode = store.get("mode") || "two_wheeler";
+let device = store.get("dev"); if(!device){device = crypto.randomUUID().replace(/-/g,""); store.set("dev",device);}
+const $ = id => document.getElementById(id);
+$("hot").href = API + "/hotspots";
+
+// ---- mode chips
+const modesEl = $("modes");
+for (const [k,v] of Object.entries(MODES)) {
+  const b = document.createElement("button"); b.className = "chip" + (k===mode?" on":""); b.textContent = v; b.dataset.m = k;
+  b.onclick = () => { mode = k; store.set("mode",k); [...modesEl.children].forEach(c=>c.classList.toggle("on",c.dataset.m===k)); drawPins(lastPins); if(lastResult) showResult(lastResult); };
+  modesEl.appendChild(b);
+}
+
+// ---- map (OpenStreetMap raster tiles: free, no key)
+const map = new maplibregl.Map({container:"map", center:[77.59,12.97], zoom:12, style:{version:8,
+  sources:{osm:{type:"raster",tiles:["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],tileSize:256,attribution:"© OpenStreetMap contributors"}},
+  layers:[{id:"osm",type:"raster",source:"osm"}]}});
+map.addControl(new maplibregl.NavigationControl({showCompass:false}));
+map.addControl(new maplibregl.GeolocateControl({trackUserLocation:false}));
+let markers = [], lastPins = [], lastResult = null;
+
+function drawPins(pins) {
+  markers.forEach(m=>m.remove()); markers = [];
+  for (const p of pins) {
+    const v = (p.verdicts||{})[mode] || "UNKNOWN";
+    const el = document.createElement("div"); el.className = "pin"; el.style.background = COLORS[v];
+    const box = document.createElement("div");
+    box.textContent = `${LABEL[v]} for ${MODES[mode].toLowerCase()} · water ~${p.band} (${p.depth_cm[0]}–${p.depth_cm[1]} cm) · ${p.reports} report${p.reports>1?"s":""}`;
+    const popup = new maplibregl.Popup({offset:14}).setDOMContent(box);
+    markers.push(new maplibregl.Marker({element:el}).setLngLat([p.lng,p.lat]).setPopup(popup).addTo(map));
+  }
+}
+async function refresh() {
+  try {
+    const b = map.getBounds();
+    const r = await fetch(`${API}/map?bbox=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`);
+    if (!r.ok) return; lastPins = (await r.json()).pins; drawPins(lastPins);
+  } catch {}
+}
+map.on("load", refresh); map.on("moveend", refresh); setInterval(refresh, 20000);   // polling, no WebSockets needed
+
+// ---- reporting
+const say = (t, err) => { $("status").textContent = t; $("status").className = err ? "err" : ""; };
+async function post(path, body) {
+  const r = await fetch(API + path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`); return j;
+}
+const getPos = () => new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,
+  ()=>rej(new Error("Location is required - allow location access and try again")), {enableHighAccuracy:true, timeout:10000, maximumAge:0}));
+async function resize(file) {   // ~1024 px long edge keeps uploads and AI calls small
+  const bmp = await createImageBitmap(file, {imageOrientation:"from-image"});
+  const k = Math.min(1, 1024/Math.max(bmp.width,bmp.height));
+  const c = document.createElement("canvas"); c.width = Math.round(bmp.width*k); c.height = Math.round(bmp.height*k);
+  c.getContext("2d").drawImage(bmp,0,0,c.width,c.height);
+  return new Promise(r=>c.toBlob(r,"image/jpeg",0.8));
+}
+function showResult(r) {
+  lastResult = r; const box = $("result"); box.textContent = "";
+  const head = document.createElement("p");
+  head.textContent = `Water looks about ${r.band} deep (${r.depth_cm[0]}–${r.depth_cm[1]} cm), confidence ${Math.round(r.confidence*100)}%, ${r.reports||1} report(s).`;
+  box.appendChild(head);
+  for (const [k,label] of Object.entries(MODES)) {
+    const v = r.verdicts[k]; const row = document.createElement("div");
+    row.className = "row" + (k===mode?" sel":""); row.style.background = COLORS[v];
+    const a = document.createElement("span"), b = document.createElement("span"); a.textContent = label; b.textContent = LABEL[v];
+    row.append(a,b); box.appendChild(row);
+  }
+}
+$("report").onclick = () => $("file").click();
+$("file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  $("report").disabled = true; $("result").textContent = "";
+  try {
+    say("Getting your location…");
+    const [pos, blob] = await Promise.all([getPos(), resize(f)]);
+    say("Uploading photo…");
+    const u = await post("/upload-url", {deviceId: device});
+    const fd = new FormData(); Object.entries(u.fields).forEach(([k,v])=>fd.append(k,v)); fd.append("file", blob);   // file must be last
+    const up = await fetch(u.url, {method:"POST", body:fd}); if (!up.ok) throw new Error("Photo upload failed");
+    say("Reading the photo… (can take ~20 s on the free AI)");
+    const r = await post("/reports", {key:u.key, lat:pos.coords.latitude, lng:pos.coords.longitude,
+      accuracy:pos.coords.accuracy, capturedAt:Math.floor(Date.now()/1000), deviceId:device});
+    say("Done."); showResult(r); map.flyTo({center:[pos.coords.longitude,pos.coords.latitude], zoom:16}); refresh();
+  } catch (err) { say(err.message, true); }
+  finally { $("report").disabled = false; }
+};
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script></body></html>

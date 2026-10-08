@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+    <title>Wade or Wait — Flooded Roads</title>
+
+    <link
+        href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+        rel="stylesheet"
+    >
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            font-family:
+                Inter,
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                sans-serif;
+            background: #0b0b0b;
+            color: #f5f5f5;
+        }
+
+        #map {
+            position: fixed;
+            inset: 0;
+        }
+
+        .topbar {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            right: 16px;
+            z-index: 10;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            pointer-events: none;
+        }
+
+        .brand,
+        .control-panel,
+        .status-panel,
+        .analysis-panel {
+            pointer-events: auto;
+            background: rgba(12, 12, 12, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow:
+                0 12px 35px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(14px);
+        }
+
+        .brand {
+            padding: 12px 16px;
+            border-radius: 14px;
+        }
+
+        .brand-title {
+            font-size: 17px;
+            font-weight: 800;
+        }
+
+        .brand-subtitle {
+            margin-top: 3px;
+            font-size: 11px;
+            color: #aaa;
+        }
+
+        .control-panel {
+            position: fixed;
+            top: 78px;
+            left: 16px;
+            z-index: 10;
+            width: 250px;
+            padding: 14px;
+            border-radius: 14px;
+        }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 800;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 8px;
+        }
+
+        .vehicle-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 7px;
+        }
+
+        button,
+        .file-label {
+            border: 1px solid rgba(255,255,255,0.12);
+            background: #171717;
+            color: #eee;
+            border-radius: 9px;
+            padding: 9px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        button:hover,
+        .file-label:hover {
+            background: #242424;
+        }
+
+        button.active {
+            background: #f5f5f5;
+            color: #111;
+        }
+
+        .action-buttons {
+            display: grid;
+            gap: 7px;
+            margin-top: 13px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .status-panel {
+            position: fixed;
+            top: 78px;
+            right: 16px;
+            z-index: 10;
+            width: 265px;
+            padding: 14px;
+            border-radius: 14px;
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+            font-size: 12px;
+        }
+
+        .status-row:last-child {
+            border-bottom: 0;
+        }
+
+        .dot {
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            margin-right: 7px;
+        }
+
+        .green { background: #22c55e; }
+        .yellow { background: #facc15; }
+        .red { background: #ef4444; }
+        .darkred { background: #7f1d1d; }
+        .gray { background: #777; }
+
+        .analysis-panel {
+            position: fixed;
+            bottom: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            width: min(620px, calc(100% - 32px));
+            padding: 15px;
+            border-radius: 15px;
+            display: none;
+        }
+
+        .analysis-panel.show {
+            display: block;
+        }
+
+        .analysis-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .verdict {
+            font-size: 19px;
+            font-weight: 900;
+        }
+
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .metric {
+            background: #171717;
+            border-radius: 9px;
+            padding: 10px;
+        }
+
+        .metric-label {
+            color: #888;
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+
+        .metric-value {
+            margin-top: 4px;
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .map-note {
+            position: fixed;
+            left: 50%;
+            top: 16px;
+            transform: translateX(-50%);
+            z-index: 5;
+            background: rgba(12,12,12,.88);
+            border: 1px solid rgba(255,255,255,.1);
+            border-radius: 999px;
+            padding: 7px 12px;
+            font-size: 11px;
+            color: #bbb;
+            pointer-events: none;
+        }
+
+        .road-popup {
+            color: #111;
+            min-width: 190px;
+        }
+
+        .road-popup h3 {
+            margin: 0 0 7px;
+            font-size: 14px;
+        }
+
+        .road-popup .big {
+            font-size: 17px;
+            font-weight: 900;
+            margin-bottom: 5px;
+        }
+
+        .road-popup .small {
+            font-size: 11px;
+            color: #555;
+        }
+
+        @media (max-width: 700px) {
+            .control-panel {
+                top: 72px;
+                left: 10px;
+                width: 215px;
+            }
+
+            .status-panel {
+                top: auto;
+                bottom: 105px;
+                right: 10px;
+                width: 180px;
+            }
+
+            .map-note {
+                top: 74px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+
+    <div class="topbar">
+        <div class="brand">
+            <div class="brand-title">WADE OR WAIT</div>
+            <div class="brand-subtitle">
+                Real roads • flood intelligence
+            </div>
+        </div>
+    </div>
+
+    <div class="map-note">
+        Roads are colored from crowd-reported flood observations
+    </div>
+
+    <div class="control-panel">
+        <div class="section-title">
+            Vehicle
+        </div>
+
+        <div class="vehicle-grid">
+            <button data-mode="pedestrian">Pedestrian</button>
+            <button data-mode="two_wheeler">2-Wheeler</button>
+            <button data-mode="hatchback" class="active">Car</button>
+            <button data-mode="suv">SUV</button>
+            <button data-mode="ambulance">Ambulance</button>
+        </div>
+
+        <div class="action-buttons">
+            <button id="locateBtn">
+                Use my location
+            </button>
+
+            <label class="file-label" for="photoInput">
+                Analyze flood photo
+            </label>
+
+            <input
+                id="photoInput"
+                type="file"
+                accept="image/*"
+                capture="environment"
+            >
+
+            <button id="refreshBtn">
+                Refresh roads
+            </button>
+        </div>
+
+        <div
+            id="message"
+            style="
+                margin-top:10px;
+                font-size:11px;
+                color:#888;
+                line-height:1.4;
+            "
+        >
+            Move the map or zoom in to load road data.
+            Each flooded road gets its own weather-based reopening estimate.
+        </div>
+    </div>
+
+    <div class="status-panel">
+        <div class="section-title">
+            Road status
+        </div>
+
+        <div class="status-row">
+            <span>
+                <span class="dot green"></span>
+                Passable
+            </span>
+            <strong id="countPassable">0</strong>
+        </div>
+
+        <div class="status-row">
+            <span>
+                <span class="dot yellow"></span>
+                Caution
+            </span>
+            <strong id="countCaution">0</strong>
+        </div>
+
+        <div class="status-row">
+            <span>
+                <span class="dot red"></span>
+                Flooded
+            </span>
+            <strong id="countFlooded">0</strong>
+        </div>
+
+        <div class="status-row">
+            <span>
+                <span class="dot darkred"></span>
+                Blocked
+            </span>
+            <strong id="countBlocked">0</strong>
+        </div>
+
+        <div class="status-row">
+            <span>
+                <span class="dot gray"></span>
+                No reports
+            </span>
+            <strong id="countUnknown">0</strong>
+        </div>
+    </div>
+
+    <div id="analysisPanel" class="analysis-panel">
+        <div class="analysis-header">
+            <div>
+                <div
+                    style="
+                        font-size:10px;
+                        color:#888;
+                        text-transform:uppercase;
+                    "
+                >
+                    Photo analysis
+                </div>
+                <div id="analysisVerdict" class="verdict">
+                    —
+                </div>
+            </div>
+
+            <button id="closeAnalysis">
+                Close
+            </button>
+        </div>
+
+        <div class="analysis-grid">
+            <div class="metric">
+                <div class="metric-label">
+                    Water depth
+                </div>
+                <div
+                    id="analysisDepth"
+                    class="metric-value"
+                >
+                    —
+                </div>
+            </div>
+
+            <div class="metric">
+                <div class="metric-label">
+                    Confidence
+                </div>
+                <div
+                    id="analysisConfidence"
+                    class="metric-value"
+                >
+                    —
+                </div>
+            </div>
+
+            <div class="metric">
+                <div class="metric-label">
+                    Flow
+                </div>
+                <div
+                    id="analysisFlow"
+                    class="metric-value"
+                >
+                    —
+                </div>
+            </div>
+        </div>
+
+        <div
+            id="analysisModel"
+            style="
+                margin-top:10px;
+                color:#777;
+                font-size:10px;
+            "
+        >
+            Vision model: —
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+
+    <script>
+        const API = window.location.origin;
+
+        let selectedVehicle = "hatchback";
+        let userPosition = null;
+        let roadRequestTimer = null;
+
+        const map = new maplibregl.Map({
+            container: "map",
+            style: {
+                version: 8,
+                sources: {
+                    osm: {
+                        type: "raster",
+                        tiles: [
+                            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        ],
+                        tileSize: 256,
+                        attribution:
+                            "© OpenStreetMap contributors"
+                    }
+                },
+                layers: [
+                    {
+                        id: "osm",
+                        type: "raster",
+                        source: "osm"
+                    }
+                ]
+            },
+            center: [77.5946, 12.9716],
+            zoom: 12
+        });
+
+        map.addControl(
+            new maplibregl.NavigationControl(),
+            "bottom-right"
+        );
+
+        function setMessage(text) {
+            document.getElementById(
+                "message"
+            ).textContent = text;
+        }
+
+        function emptyRoadGeoJSON() {
+            return {
+                type: "FeatureCollection",
+                features: []
+            };
+        }
+
+        map.on("load", () => {
+            map.addSource(
+                "flood-roads",
+                {
+                    type: "geojson",
+                    data: emptyRoadGeoJSON()
+                }
+            );
+
+            map.addLayer({
+                id: "roads-unknown",
+                type: "line",
+                source: "flood-roads",
+                filter: [
+                    "==",
+                    ["get", "status"],
+                    "UNKNOWN"
+                ],
+                paint: {
+                    "line-color": "#777777",
+                    "line-width": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        10, 1.5,
+                        14, 3,
+                        18, 5
+                    ],
+                    "line-opacity": 0.28
+                }
+            });
+
+            map.addLayer({
+                id: "roads-passable",
+                type: "line",
+                source: "flood-roads",
+                filter: [
+                    "==",
+                    ["get", "status"],
+                    "PASSABLE"
+                ],
+                paint: {
+                    "line-color": "#22c55e",
+                    "line-width": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        10, 2,
+                        14, 4,
+                        18, 7
+                    ],
+                    "line-opacity": 0.9
+                }
+            });
+
+            map.addLayer({
+                id: "roads-caution",
+                type: "line",
+                source: "flood-roads",
+                filter: [
+                    "==",
+                    ["get", "status"],
+                    "CAUTION"
+                ],
+                paint: {
+                    "line-color": "#facc15",
+                    "line-width": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        10, 2.5,
+                        14, 5,
+                        18, 8
+                    ],
+                    "line-opacity": 0.95
+                }
+            });
+
+            map.addLayer({
+                id: "roads-flooded",
+                type: "line",
+                source: "flood-roads",
+                filter: [
+                    "==",
+                    ["get", "status"],
+                    "FLOODED"
+                ],
+                paint: {
+                    "line-color": "#ef4444",
+                    "line-width": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        10, 3,
+                        14, 6,
+                        18, 10
+                    ],
+                    "line-opacity": 1
+                }
+            });
+
+            map.addLayer({
+                id: "roads-blocked",
+                type: "line",
+                source: "flood-roads",
+                filter: [
+                    "==",
+                    ["get", "status"],
+                    "BLOCKED"
+                ],
+                paint: {
+                    "line-color": "#7f1d1d",
+                    "line-width": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        10, 4,
+                        14, 7,
+                        18, 12
+                    ],
+                    "line-opacity": 1
+                }
+            });
+
+            loadRoads();
+        });
+
+        function currentBbox() {
+            const bounds = map.getBounds();
+
+            return [
+                bounds.getWest(),
+                bounds.getSouth(),
+                bounds.getEast(),
+                bounds.getNorth()
+            ].join(",");
+        }
+
+        async function loadRoads() {
+            if (!map.loaded()) {
+                return;
+            }
+
+            if (map.getZoom() < 11) {
+                setMessage(
+                    "Zoom in to load road flood data."
+                );
+
+                return;
+            }
+
+            setMessage(
+                "Loading real road geometry..."
+            );
+
+            try {
+                const response = await fetch(
+                    `${API}/roads?bbox=${encodeURIComponent(
+                        currentBbox()
+                    )}&mode=${encodeURIComponent(
+                        selectedVehicle
+                    )}`
+                );
+
+                if (!response.ok) {
+                    throw new Error(
+                        `Road request failed: ${response.status}`
+                    );
+                }
+
+                const data =
+                    await response.json();
+
+                const source =
+                    map.getSource(
+                        "flood-roads"
+                    );
+
+                if (source) {
+                    source.setData(
+                        data
+                    );
+                }
+
+                updateCounts(
+                    data.counts || {}
+                );
+
+                const featureCount =
+                    (
+                        data.features || []
+                    ).length;
+
+                setMessage(
+                    featureCount
+                        ? `${featureCount} roads loaded • ${vehicleLabel(selectedVehicle)}`
+                        : (
+                            data.message ||
+                            "No roads returned."
+                        )
+                );
+
+            } catch (error) {
+                console.error(error);
+
+                setMessage(
+                    "Could not load road data. Try again."
+                );
+            }
+        }
+
+        function updateCounts(counts) {
+            document.getElementById(
+                "countPassable"
+            ).textContent =
+                counts.PASSABLE || 0;
+
+            document.getElementById(
+                "countCaution"
+            ).textContent =
+                counts.CAUTION || 0;
+
+            document.getElementById(
+                "countFlooded"
+            ).textContent =
+                counts.FLOODED || 0;
+
+            document.getElementById(
+                "countBlocked"
+            ).textContent =
+                counts.BLOCKED || 0;
+
+            document.getElementById(
+                "countUnknown"
+            ).textContent =
+                counts.UNKNOWN || 0;
+        }
+
+        function scheduleRoadRefresh() {
+            clearTimeout(
+                roadRequestTimer
+            );
+
+            roadRequestTimer =
+                setTimeout(
+                    loadRoads,
+                    450
+                );
+        }
+
+        map.on(
+            "moveend",
+            scheduleRoadRefresh
+        );
+
+        function vehicleLabel(mode) {
+            const labels = {
+                pedestrian: "Pedestrian",
+                two_wheeler: "2-Wheeler",
+                hatchback: "Car",
+                suv: "SUV",
+                ambulance: "Ambulance"
+            };
+
+            return (
+                labels[mode]
+                || mode
+            );
+        }
+
+        document
+            .querySelectorAll(
+                "[data-mode]"
+            )
+            .forEach(button => {
+                button.addEventListener(
+                    "click",
+                    () => {
+                        selectedVehicle =
+                            button.dataset.mode;
+
+                        document
+                            .querySelectorAll(
+                                "[data-mode]"
+                            )
+                            .forEach(
+                                b =>
+                                    b.classList.remove(
+                                        "active"
+                                    )
+                            );
+
+                        button.classList.add(
+                            "active"
+                        );
+
+                        loadRoads();
+                    }
+                );
+            });
+
+        document
+            .getElementById("refreshBtn")
+            .addEventListener(
+                "click",
+                loadRoads
+            );
+
+        document
+            .getElementById("locateBtn")
+            .addEventListener(
+                "click",
+                locateUser
+            );
+
+        function locateUser() {
+            if (!navigator.geolocation) {
+                setMessage(
+                    "Geolocation is not available."
+                );
+
+                return;
+            }
+
+            setMessage(
+                "Finding your location..."
+            );
+
+            navigator.geolocation.getCurrentPosition(
+                position => {
+                    userPosition = {
+                        lat:
+                            position.coords.latitude,
+                        lng:
+                            position.coords.longitude
+                    };
+
+                    map.flyTo({
+                        center: [
+                            userPosition.lng,
+                            userPosition.lat
+                        ],
+                        zoom: 15,
+                        duration: 1000
+                    });
+
+                    new maplibregl.Marker({
+                        color: "#111111"
+                    })
+                        .setLngLat([
+                            userPosition.lng,
+                            userPosition.lat
+                        ])
+                        .addTo(map);
+
+                    setMessage(
+                        "Location found."
+                    );
+                },
+                error => {
+                    console.error(error);
+
+                    setMessage(
+                        "Location permission was unavailable."
+                    );
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 30000
+                }
+            );
+        }
+
+        document
+            .getElementById("photoInput")
+            .addEventListener(
+                "change",
+                handlePhoto
+            );
+
+        async function handlePhoto(event) {
+            const file =
+                event.target.files[0];
+
+            if (!file) {
+                return;
+            }
+
+            if (!userPosition) {
+                await getLocationPromise();
+            }
+
+            if (!userPosition) {
+                setMessage(
+                    "Enable location before uploading a flood photo."
+                );
+
+                return;
+            }
+
+            setMessage(
+                "Uploading and analyzing photo..."
+            );
+
+            try {
+                const uploadUrlResponse =
+                    await fetch(
+                        `${API}/upload-url`,
+                        {
+                            method: "POST"
+                        }
+                    );
+
+                if (
+                    !uploadUrlResponse.ok
+                ) {
+                    throw new Error(
+                        "Could not create upload."
+                    );
+                }
+
+                const uploadInfo =
+                    await uploadUrlResponse.json();
+
+                const formData =
+                    new FormData();
+
+                formData.append(
+                    "key",
+                    uploadInfo.key
+                );
+
+                formData.append(
+                    "file",
+                    file,
+                    "photo.jpg"
+                );
+
+                const uploadResponse =
+                    await fetch(
+                        `${API}${uploadInfo.url}`,
+                        {
+                            method: "POST",
+                            body: formData
+                        }
+                    );
+
+                if (!uploadResponse.ok) {
+                    throw new Error(
+                        "Photo upload failed."
+                    );
+                }
+
+                const reportResponse =
+                    await fetch(
+                        `${API}/reports`,
+                        {
+                            method: "POST",
+                            headers: {
+                                "Content-Type":
+                                    "application/json"
+                            },
+                            body: JSON.stringify({
+                                key:
+                                    uploadInfo.key,
+
+                                lat:
+                                    userPosition.lat,
+
+                                lng:
+                                    userPosition.lng,
+
+                                accuracy:
+                                    null,
+
+                                capturedAt:
+                                    Math.floor(
+                                        Date.now()
+                                        / 1000
+                                    ),
+
+                                deviceId:
+                                    "web"
+                            })
+                        }
+                    );
+
+                if (!reportResponse.ok) {
+                    const errorText =
+                        await reportResponse.text();
+
+                    throw new Error(
+                        errorText
+                        || "Analysis failed."
+                    );
+                }
+
+                const result =
+                    await reportResponse.json();
+
+                showAnalysis(result);
+
+                // The newly submitted report is now in SQLite.
+                // Reload road geometries so the nearest road changes
+                // from UNKNOWN to its new flood status.
+                await loadRoads();
+
+                setMessage(
+                    "Flood report added to the road map."
+                );
+
+            } catch (error) {
+                console.error(error);
+
+                setMessage(
+                    "Could not analyze the photo."
+                );
+            }
+
+            event.target.value = "";
+        }
+
+        function getLocationPromise() {
+            return new Promise(resolve => {
+                if (!navigator.geolocation) {
+                    resolve();
+                    return;
+                }
+
+                navigator.geolocation.getCurrentPosition(
+                    position => {
+                        userPosition = {
+                            lat:
+                                position.coords.latitude,
+
+                            lng:
+                                position.coords.longitude
+                        };
+
+                        resolve();
+                    },
+                    () => {
+                        resolve();
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 30000
+                    }
+                );
+            });
+        }
+
+        function showAnalysis(result) {
+            const panel =
+                document.getElementById(
+                    "analysisPanel"
+                );
+
+            const verdict =
+                result.verdicts &&
+                result.verdicts[
+                    selectedVehicle
+                ];
+
+            document.getElementById(
+                "analysisVerdict"
+            ).textContent =
+                verdict || "UNKNOWN";
+
+            document.getElementById(
+                "analysisDepth"
+            ).textContent =
+                result.depth_cm
+                    ? `${result.depth_cm[0]}–${result.depth_cm[1]} cm`
+                    : "Unknown";
+
+            document.getElementById(
+                "analysisConfidence"
+            ).textContent =
+                result.confidence != null
+                    ? `${Math.round(
+                        result.confidence * 100
+                    )}%`
+                    : "Unknown";
+
+            document.getElementById(
+                "analysisFlow"
+            ).textContent =
+                result.flow || "Unknown";
+
+            const model =
+                result.perception_model ||
+                (result.perception_mode === "stub"
+                    ? "stub"
+                    : "unknown");
+
+            document.getElementById(
+                "analysisModel"
+            ).textContent =
+                `Vision model: ${model}` +
+                (result.perception_mode === "stub"
+                    ? " (STATIC DEMO DATA)"
+                    : " (LIVE LOCAL ANALYSIS)");
+
+            panel.classList.add(
+                "show"
+            );
+        }
+
+        document
+            .getElementById("closeAnalysis")
+            .addEventListener(
+                "click",
+                () => {
+                    document
+                        .getElementById(
+                            "analysisPanel"
+                        )
+                        .classList.remove(
+                            "show"
+                        );
+                }
+            );
+
+        const clickableLayers = [
+            "roads-passable",
+            "roads-caution",
+            "roads-flooded",
+            "roads-blocked",
+            "roads-unknown"
+        ];
+
+        clickableLayers.forEach(
+            layerId => {
+                map.on(
+                    "click",
+                    layerId,
+                    event => {
+                        const feature =
+                            event.features &&
+                            event.features[0];
+
+                        if (!feature) {
+                            return;
+                        }
+
+                        const p =
+                            feature.properties;
+
+                        const status =
+                            p.status;
+
+                        let color =
+                            "#777";
+
+                        if (
+                            status ===
+                            "PASSABLE"
+                        ) {
+                            color =
+                                "#16a34a";
+                        }
+
+                        if (
+                            status ===
+                            "CAUTION"
+                        ) {
+                            color =
+                                "#ca8a04";
+                        }
+
+                        if (
+                            status ===
+                            "FLOODED"
+                        ) {
+                            color =
+                                "#dc2626";
+                        }
+
+                        if (
+                            status ===
+                            "BLOCKED"
+                        ) {
+                            color =
+                                "#7f1d1d";
+                        }
+
+                        const depth =
+                            p.depth_cm != null
+                                ? `${p.depth_cm} cm`
+                                : "No flood report";
+
+                        new maplibregl.Popup()
+                            .setLngLat(
+                                event.lngLat
+                            )
+                            .setHTML(`
+                                <div class="road-popup">
+                                    <h3>
+                                        ${escapeHtml(
+                                            p.name
+                                        )}
+                                    </h3>
+
+                                    <div
+                                        class="big"
+                                        style="color:${color}"
+                                    >
+                                        ${escapeHtml(
+                                            status
+                                        )}
+                                    </div>
+
+                                    <div class="small">
+                                        Vehicle:
+                                        ${escapeHtml(
+                                            vehicleLabel(
+                                                selectedVehicle
+                                            )
+                                        )}
+                                    </div>
+
+                                    <div class="small">
+                                        Water:
+                                        ${escapeHtml(
+                                            depth
+                                        )}
+                                    </div>
+
+                                    <div class="small">
+                                        Reports:
+                                        ${escapeHtml(
+                                            p.reports
+                                        )}
+                                    </div>
+
+                                    <div class="small">
+                                        Confidence:
+                                        ${Math.round(
+                                            Number(
+                                                p.confidence
+                                            ) * 100
+                                        )}%
+                                    </div>
+
+                                    ${
+                                        p.clear_in_minutes != null
+                                        ? `
+                                        <div style="
+                                            margin-top:9px;
+                                            padding-top:9px;
+                                            border-top:1px solid #ddd;
+                                        ">
+                                            <div style="
+                                                font-size:10px;
+                                                color:#777;
+                                                text-transform:uppercase;
+                                            ">
+                                                Estimated reopening
+                                            </div>
+
+                                            <div style="
+                                                font-size:16px;
+                                                font-weight:900;
+                                                margin-top:3px;
+                                            ">
+                                                ${escapeHtml(
+                                                    formatMinutes(
+                                                        p.clear_in_minutes
+                                                    )
+                                                )}
+                                            </div>
+
+                                            <div class="small">
+                                                Rain expected:
+                                                ${escapeHtml(
+                                                    formatMinutes(
+                                                        p.rain_minutes
+                                                    )
+                                                )}
+                                            </div>
+
+                                            <div class="small">
+                                                Forecast rain:
+                                                ${escapeHtml(
+                                                    p.forecast_rain_mm != null
+                                                        ? `${p.forecast_rain_mm} mm`
+                                                        : "Unknown"
+                                                )}
+                                            </div>
+
+                                            ${
+                                                p.weather &&
+                                                p.weather.temperature_c != null
+                                                ? `
+                                                <div class="small">
+                                                    Weather:
+                                                    ${escapeHtml(
+                                                        Number(
+                                                            p.weather.temperature_c
+                                                        ).toFixed(1)
+                                                    )}°C,
+                                                    rain
+                                                    ${escapeHtml(
+                                                        p.weather.rain_mm || 0
+                                                    )} mm/h
+                                                </div>
+                                                `
+                                                : ""
+                                            }
+                                        </div>
+                                        `
+                                        : ""
+                                    }
+                                </div>
+                            `)
+                            .addTo(map);
+                    }
+                );
+
+                map.on(
+                    "mouseenter",
+                    layerId,
+                    () => {
+                        map.getCanvas().style.cursor =
+                            "pointer";
+                    }
+                );
+
+                map.on(
+                    "mouseleave",
+                    layerId,
+                    () => {
+                        map.getCanvas().style.cursor =
+                            "";
+                    }
+                );
+            }
+        );
+
+        function formatMinutes(minutes) {
+            if (minutes == null) {
+                return "Unknown";
+            }
+
+            const value = Number(minutes);
+
+            if (!Number.isFinite(value)) {
+                return "Unknown";
+            }
+
+            if (value <= 0) {
+                return "Now";
+            }
+
+            const hours = Math.floor(
+                value / 60
+            );
+
+            const mins = value % 60;
+
+            if (hours === 0) {
+                return `${mins} min`;
+            }
+
+            if (mins === 0) {
+                return `${hours} hr`;
+            }
+
+            return `${hours} hr ${mins} min`;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#039;");
+        }
+    </script>
+</body>
+</html>

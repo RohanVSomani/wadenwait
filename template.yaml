@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Wade or Wait - flood-crossing verdicts from photos (built to stay in free tiers)
+
+Parameters:
+  OpenRouterKeyParam:
+    Type: String
+    Default: /wade-or-wait/openrouter-key   # SecureString you create once (see README)
+  AlertEmail:
+    Type: String
+    Description: Email for the $1 AWS Budgets alert
+  PerceptionMode:
+    Type: String
+    Default: openrouter
+    AllowedValues: [openrouter, stub]
+  ModelPrimary:
+    Type: String
+    Default: openrouter/free      # router that only picks free, image-capable models
+  ModelFallback:
+    Type: String
+    Default: openrouter/free
+  GeofenceBbox:
+    Type: String
+    Default: "12.80,77.40,13.20,77.80"   # lat_min,lng_min,lat_max,lng_max - your demo city
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 25               # under API Gateway's 29 s
+    MemorySize: 256
+    CodeUri: src/
+    Environment:
+      Variables:
+        TABLE: !Ref Table
+        BUCKET: !Ref PhotoBucket
+        PERCEPTION_MODE: !Ref PerceptionMode
+        GEOFENCE_BBOX: !Ref GeofenceBbox
+        MODEL_PRIMARY: !Ref ModelPrimary
+        MODEL_FALLBACK: !Ref ModelFallback
+
+Resources:
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: wade-or-wait-api
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"          # tighten to your PWA origin before the demo
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingRateLimit: 10
+          ThrottlingBurstLimit: 20
+          MetricsEnabled: true
+
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - {AllowedMethods: [POST, PUT], AllowedOrigins: ['*'], AllowedHeaders: ['*']}
+      LifecycleConfiguration:
+        Rules:
+          - {Id: expire-photos, Status: Enabled, Prefix: photos/, ExpirationInDays: 3}
+
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PROVISIONED      # on-demand is NOT in the always-free tier; 25 RCU/WCU provisioned is
+      ProvisionedThroughput: {ReadCapacityUnits: 10, WriteCapacityUnits: 10}
+      AttributeDefinitions:
+        - {AttributeName: PK, AttributeType: S}
+        - {AttributeName: SK, AttributeType: S}
+        - {AttributeName: gh4, AttributeType: S}
+        - {AttributeName: hk, AttributeType: S}
+        - {AttributeName: expiresAt, AttributeType: N}
+      GlobalSecondaryIndexes:
+        - IndexName: StateIndex
+          KeySchema: [{AttributeName: gh4, KeyType: HASH}, {AttributeName: expiresAt, KeyType: RANGE}]
+          Projection: {ProjectionType: ALL}
+          ProvisionedThroughput: {ReadCapacityUnits: 5, WriteCapacityUnits: 5}
+        - IndexName: HistIndex
+          KeySchema: [{AttributeName: hk, KeyType: HASH}, {AttributeName: SK, KeyType: RANGE}]
+          Projection: {ProjectionType: ALL}
+          ProvisionedThroughput: {ReadCapacityUnits: 5, WriteCapacityUnits: 5}
+      KeySchema:
+        - {AttributeName: PK, KeyType: HASH}
+        - {AttributeName: SK, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: expiresAt, Enabled: true}
+
+  UploadUrlFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: wade-or-wait-upload
+      Handler: handlers.upload_url.handler
+      Policies:
+        - S3WritePolicy: {BucketName: !Ref PhotoBucket}
+      Events:
+        Post:
+          Type: Api
+          Properties: {RestApiId: !Ref Api, Path: /upload-url, Method: post}
+
+  AnalyzeFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: wade-or-wait-analyze
+      Handler: handlers.analyze.handler
+      Environment:
+        Variables:
+          OPENROUTER_KEY_PARAM: !Ref OpenRouterKeyParam
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${OpenRouterKeyParam}"
+        - S3ReadPolicy: {BucketName: !Ref PhotoBucket}
+        - DynamoDBCrudPolicy: {TableName: !Ref Table}
+      Events:
+        Post:
+          Type: Api
+          Properties: {RestApiId: !Ref Api, Path: /reports, Method: post}
+
+  MapFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: wade-or-wait-map
+      Handler: handlers.map_pins.handler
+      Policies:
+        - DynamoDBReadPolicy: {TableName: !Ref Table}
+      Events:
+        Get:
+          Type: Api
+          Properties: {RestApiId: !Ref Api, Path: /map, Method: get}
+
+  ConfirmFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: wade-or-wait-confirm
+      Handler: handlers.confirm.handler
+      Policies:
+        - DynamoDBCrudPolicy: {TableName: !Ref Table}
+      Events:
+        Post:
+          Type: Api
+          Properties: {RestApiId: !Ref Api, Path: /confirm, Method: post}
+
+  ReportFn:                       # hourly job: writes reports/hotspots.{json,html} to S3
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: wade-or-wait-report
+      Handler: handlers.report.handler
+      Policies:
+        - DynamoDBReadPolicy: {TableName: !Ref Table}
+        - S3WritePolicy: {BucketName: !Ref PhotoBucket}
+      Events:
+        Hourly:
+          Type: ScheduleV2
+          Properties: {ScheduleExpression: "rate(1 hour)"}
+
+  HotspotsApiFn:                  # GET /hotspots (html) and /hotspots.json
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: wade-or-wait-hotspots
+      Handler: handlers.hotspots_api.handler
+      Policies:
+        - S3ReadPolicy: {BucketName: !Ref PhotoBucket}
+      Events:
+        Html:
+          Type: Api
+          Properties: {RestApiId: !Ref Api, Path: /hotspots, Method: get}
+        Json:
+          Type: Api
+          Properties: {RestApiId: !Ref Api, Path: /hotspots.json, Method: get}
+
+  LogsUploadUrlFn:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /aws/lambda/wade-or-wait-upload, RetentionInDays: 7}
+
+  LogsAnalyzeFn:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /aws/lambda/wade-or-wait-analyze, RetentionInDays: 7}
+
+  LogsMapFn:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /aws/lambda/wade-or-wait-map, RetentionInDays: 7}
+
+  LogsConfirmFn:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /aws/lambda/wade-or-wait-confirm, RetentionInDays: 7}
+
+  LogsReportFn:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /aws/lambda/wade-or-wait-report, RetentionInDays: 7}
+
+  LogsHotspotsApiFn:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /aws/lambda/wade-or-wait-hotspots, RetentionInDays: 7}
+
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: wade-or-wait-1-usd
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: 1, Unit: USD}
+      NotificationsWithSubscribers:
+        - Notification: {NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 50, ThresholdType: PERCENTAGE}
+          Subscribers: [{SubscriptionType: EMAIL, Address: !Ref AlertEmail}]
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: wade-or-wait
+      DashboardBody: !Sub |
+        {"widgets":[
+         {"type":"metric","x":0,"y":0,"width":8,"height":6,"properties":{"title":"Analyze Lambda","region":"${AWS::Region}","metrics":[["AWS/Lambda","Invocations","FunctionName","${AnalyzeFn}"],[".","Errors",".","."],[".","Duration",".",".",{"stat":"p95"}]]}},
+         {"type":"metric","x":8,"y":0,"width":8,"height":6,"properties":{"title":"API Gateway","region":"${AWS::Region}","metrics":[["AWS/ApiGateway","Count","ApiName","wade-or-wait-api"],[".","4XXError",".","."],[".","5XXError",".","."]]}},
+         {"type":"metric","x":16,"y":0,"width":8,"height":6,"properties":{"title":"Report outcomes","region":"${AWS::Region}","stat":"Sum","metrics":[["WadeOrWait","Report","Outcome","accepted"],["...","rejected_trust"],["...","rejected_unusable"],["...","duplicate"],["...","rate_limited"],["...","error"]]}}]}
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  BucketName:
+    Value: !Ref PhotoBucket
